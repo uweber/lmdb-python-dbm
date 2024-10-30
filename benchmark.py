@@ -5,19 +5,14 @@ import os.path
 import pathlib
 import pickle  # nosec
 import shutil
+import sys
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from contextlib import closing, suppress
 from random import randrange
 from typing import Any, Callable, ContextManager, DefaultDict, Dict, Iterable, List, Sequence, TextIO
 
-import pysos
-import rocksdict
-import semidbm
-import sqlitedict
-import unqlite
-import vedis
-import shelve
+from importlib import import_module
 from genutility.iter import batch
 from genutility.time import MeasureTime
 from pytablewriter import MarkdownTableWriter
@@ -34,7 +29,7 @@ BATCH_SIZE = 10000
 
 
 class BaseBenchmark(ABC):
-    def __init__(self, db_tpl, db_type):
+    def __init__(self, db_tpl, db_type, db_module=None):
         self.available = True
         self.batch_available = True
         self.path = db_tpl.format(db_type)
@@ -43,6 +38,19 @@ class BaseBenchmark(ABC):
         self.batch = -1
         self.read = -1
         self.combined = -1
+
+        self.available = self.load_module(db_type if db_module is None else db_module)
+
+    def load_module(self, name):
+        if name in sys.modules:
+            return True
+
+        try:
+            globals()[name.split('.')[-1]] = import_module(name)
+            print(f"Loaded module {name}")
+        except ImportError:
+            return False
+        return True
 
     @abstractmethod
     def open(self) -> ContextManager:
@@ -243,7 +251,7 @@ class PysosBenchmark(BaseBenchmark):
 
 class SqliteAutocommitBenchmark(BaseBenchmark):
     def __init__(self, db_tpl):
-        super().__init__(db_tpl, "sqlite-autocommit")
+        super().__init__(db_tpl, "sqlite-autocommit", "sqlitedict")
 
     def open(self):
         return sqlitedict.SqliteDict(self.path, autocommit=True)
@@ -251,7 +259,7 @@ class SqliteAutocommitBenchmark(BaseBenchmark):
 
 class SqliteWalBenchmark(BaseBenchmark):
     def __init__(self, db_tpl):
-        super().__init__(db_tpl, "sqlite-wal")
+        super().__init__(db_tpl, "sqlite-wal", "sqlitedict")
 
     def open(self):
         return sqlitedict.SqliteDict(self.path, autocommit=True, journal_mode="WAL")
@@ -259,7 +267,7 @@ class SqliteWalBenchmark(BaseBenchmark):
 
 class SqliteBatchBenchmark(BaseBenchmark):
     def __init__(self, db_tpl):
-        super().__init__(db_tpl, "sqlite-batch")
+        super().__init__(db_tpl, "sqlite-batch", "sqlitedict")
         self.db = None
 
     def open(self):
@@ -273,12 +281,8 @@ class SqliteBatchBenchmark(BaseBenchmark):
 class GnuDbmBenchmark(JsonEncodedBenchmark):
     def __init__(self, db_tpl):
         super().__init__(db_tpl, "dbm.gnu")
-        try:
-            import dbm.gnu
-
+        if self.available:
             self.gnu_dbm = dbm.gnu
-        except ImportError:
-            self.available = False
         self.batch_available = False
 
     def open(self):
